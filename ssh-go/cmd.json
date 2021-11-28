@@ -1,0 +1,15 @@
+{
+    "example": [{
+            "host": "192.168.188.188",
+            "user": "linxiqin",
+            "pwd": "lmon.com",
+            "cmd": ["a", "b"]
+        },
+        {
+            "host": "192.168.188.188",
+            "user": "linxiqin",
+            "pwd": "lmon.com",
+            "cmd": ["a", "b"]
+        }
+    ]
+}
