@@ -1,13 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"ssh-go/Config"
 	"ssh-go/SshClient"
 )
 
 func main() {
-	var mapClient map[int]*(SshClient.Client)
+	// var mapClient map[int]*(SshClient.Client)
 
 	data, err := Config.LoadCofig("./cmd.json")
 	if err != nil {
@@ -15,16 +16,28 @@ func main() {
 		return
 	}
 
-	for i, v := range data.Example {
+	for _, v := range data.Example {
 		// fmt.Print(i)
 		// fmt.Println(v)
-		client := SshClient.NewSshClient(v.User, v.Pwd, v.Host, 22)
-		mapClient[i] = client
-		// go func() {
-		// 	// for i, v := range v.Cmd {
+		client, err := SshClient.NewSshClient(v.User, v.Pwd, v.Host, 22)
+		if err == nil {
+			// mapClient[i] = client
+			go func(x Config.Example) {
+				for _, cv := range x.Cmd {
+					client.Cmd <- &SshClient.CmdRes{
+						Msg:       cv,
+						ResHandle: func(str string) { fmt.Println(client.IpAddress, "[res]->", str) },
+					}
+				}
+				fmt.Println(client.IpAddress, "[end]")
+			}(v)
+		} else {
+			fmt.Println(client.IpAddress, err)
+		}
 
-		// 	// }
-		// }()
+	}
+
+	for {
 	}
 
 	// fmt.Println("hello Test")

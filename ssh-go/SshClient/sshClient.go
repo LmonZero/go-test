@@ -19,26 +19,24 @@ type Client struct {
 	IpAddress string
 	Port      int
 	Cmd       chan *CmdRes
-	IsAlive   chan bool
+	KillMe    chan bool
+	IsAlive   bool
 	session   *ssh.Session
+	client    *ssh.Client
+	Id        int
 }
 
-func NewSshClient(Username string, Password string, IpAddress string, Port int) *Client {
+func NewSshClient(Username string, Password string, IpAddress string, Port int) (*Client, error) {
 	client := &Client{
 		Username:  Username,
 		Password:  Password,
 		IpAddress: IpAddress,
 		Port:      Port,
+		KillMe:    make(chan bool),
 		Cmd:       make(chan *CmdRes),
-		IsAlive:   make(chan bool),
+		IsAlive:   true,
 	}
 
-	go client.runClient()
-
-	return client
-}
-
-func (client *Client) runClient() {
 	// 创建ssh登录配置
 	config := &ssh.ClientConfig{
 		Timeout:         time.Second, // ssh连接time out时间一秒钟,如果ssh验证错误会在一秒钟返回
@@ -53,43 +51,25 @@ func (client *Client) runClient() {
 	SshClient, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
 		// log.Println("dial 创建 ssh client 失败->", err)
-		log.Println("dial 创建 ssh client 失败->", err)
-		client.IsAlive <- true
-
+		client.IsAlive = false
+		log.Println(client.IpAddress, "-dial 创建 ssh client 失败->", err)
+		return client, err
 	}
-	defer SshClient.Close()
+	client.client = SshClient
 
 	// 创建ssh-session
 	session, err := SshClient.NewSession()
 	if err != nil {
-		log.Println("SshClient 创建ssh session失败", err)
-		client.IsAlive <- true
+		log.Println(client.IpAddress, "-SshClient 创建ssh session失败", err)
+		client.IsAlive = false
+		return client, err
 	}
 	client.session = session
-	defer session.Close()
 
-	go func() {
-		for {
-			cmd := <-client.Cmd
-			msg, err := client.sendCmd(cmd.Msg)
-			if err != nil {
-				log.Println("远程执行cmd失败->", err)
-			}
-			cmd.ResHandle(msg)
-		}
-	}()
+	//泡吧
+	go client.runClient()
 
-	for {
-		select {
-		case <-client.IsAlive:
-
-			return
-
-		case <-time.After(time.Second):
-
-		}
-	}
-
+	return client, nil
 }
 
 func (client *Client) sendCmd(cmd string) (string, error) {
@@ -102,6 +82,43 @@ func (client *Client) sendCmd(cmd string) (string, error) {
 	return string(combo), err
 }
 
-func TestSshClient() {
-	fmt.Println("hello ssh Client")
+func (client *Client) runClient() {
+
+	go func() {
+		for {
+			cmd := <-client.Cmd
+			msg, err := client.sendCmd(cmd.Msg)
+			if err != nil {
+				log.Println(client.IpAddress, "-远程执行cmd失败->", err)
+			}
+			cmd.ResHandle(msg)
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case <-time.After(time.Second * 2):
+				log.Println(client.IpAddress, "-[来吧！！！]")
+			}
+			fmt.Println("12345531")
+		}
+	}()
+
+	for {
+		select {
+		case <-client.KillMe:
+			client.session.Close()
+			client.client.Close()
+			client.IsAlive = false
+			log.Println(client.IpAddress, "-[退出]")
+			return
+
+		case <-time.After(time.Second * 10):
+			log.Println(client.IpAddress, "-[来吧！！！]")
+			client.KillMe <- true
+
+		}
+	}
+
 }

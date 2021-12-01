@@ -8,12 +8,13 @@ import (
 )
 
 type ConfigSSH struct {
-	Example []struct {
-		Host string   `json:"host"`
-		User string   `json:"user"`
-		Pwd  string   `json:"pwd"`
-		Cmd  []string `json:"cmd"`
-	} `json:"example"`
+	Example []Example `json:"example"`
+}
+type Example struct {
+	Host string   `json:"host"`
+	User string   `json:"user"`
+	Pwd  string   `json:"pwd"`
+	Cmd  []string `json:"cmd"`
 }
 
 func LoadCofig(path string) (ConfigSSH, error) {
