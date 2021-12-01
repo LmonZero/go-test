@@ -52,14 +52,18 @@ func (client *Client) runClient() {
 	addr := fmt.Sprintf("%s:%d", client.IpAddress, client.Port)
 	SshClient, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		log.Fatal("dial 创建 ssh client 失败->", err)
+		// log.Println("dial 创建 ssh client 失败->", err)
+		log.Println("dial 创建 ssh client 失败->", err)
+		client.IsAlive <- true
+
 	}
 	defer SshClient.Close()
 
 	// 创建ssh-session
 	session, err := SshClient.NewSession()
 	if err != nil {
-		log.Fatal("SshClient 创建ssh session失败", err)
+		log.Println("SshClient 创建ssh session失败", err)
+		client.IsAlive <- true
 	}
 	client.session = session
 	defer session.Close()
@@ -69,7 +73,7 @@ func (client *Client) runClient() {
 			cmd := <-client.Cmd
 			msg, err := client.sendCmd(cmd.Msg)
 			if err != nil {
-				log.Fatal("远程执行cmd失败->", err)
+				log.Println("远程执行cmd失败->", err)
 			}
 			cmd.ResHandle(msg)
 		}
@@ -78,8 +82,11 @@ func (client *Client) runClient() {
 	for {
 		select {
 		case <-client.IsAlive:
-			log.Fatal("[退出链接]")
+
 			return
+
+		case <-time.After(time.Second):
+
 		}
 	}
 
@@ -89,7 +96,7 @@ func (client *Client) sendCmd(cmd string) (string, error) {
 	// 执行远程命令
 	combo, err := client.session.CombinedOutput(cmd)
 	// if err != nil {
-	// 	log.Fatal("远程执行cmd失败->", err)
+	// 	log.Println("远程执行cmd失败->", err)
 	// }
 	// log.Println("命令输出:", string(combo))
 	return string(combo), err
