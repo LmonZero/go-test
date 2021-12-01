@@ -13,17 +13,27 @@ type CmdRes struct {
 	ResHandle func(str string)
 }
 
+type ptyRequestMsg struct {
+	Term     string
+	Columns  uint32
+	Rows     uint32
+	Width    uint32
+	Height   uint32
+	Modelist string
+}
+
 type Client struct {
-	Username  string
-	Password  string
-	IpAddress string
-	Port      int
-	Cmd       chan *CmdRes
-	KillMe    chan bool
-	IsAlive   bool
-	session   *ssh.Session
-	client    *ssh.Client
-	Id        int
+	Username   string
+	Password   string
+	IpAddress  string
+	Port       int
+	Cmd        chan *CmdRes
+	KillMe     chan bool
+	IsAlive    bool
+	sshSession *ssh.Session
+	sshClient  *ssh.Client
+	sshChannel *ssh.Channel
+	Id         int
 }
 
 func NewSshClient(Username string, Password string, IpAddress string, Port int) (*Client, error) {
@@ -52,19 +62,48 @@ func NewSshClient(Username string, Password string, IpAddress string, Port int) 
 	if err != nil {
 		// log.Println("dial 创建 ssh client 失败->", err)
 		client.IsAlive = false
-		log.Println(client.IpAddress, "-dial 创建 ssh client 失败->", err)
+		client.log(client.IpAddress, "-dial 创建 ssh client 失败->", err)
 		return client, err
 	}
-	client.client = SshClient
+	client.sshClient = SshClient
+
+	//创建远程端shell
+	channel, inRequests, err := client.sshClient.OpenChannel("session", nil)
+	if err != nil {
+		log.Println(client.IpAddress, "创建远程端shell->", err)
+		return client, err
+	}
+	client.sshChannel = &channel
+	go func() {
+		for req := range inRequests {
+			if req.WantReply {
+				req.Reply(false, nil)
+			}
+		}
+	}()
 
 	// 创建ssh-session
 	session, err := SshClient.NewSession()
 	if err != nil {
-		log.Println(client.IpAddress, "-SshClient 创建ssh session失败", err)
+		client.log(client.IpAddress, "-SshClient 创建ssh session失败", err)
 		client.IsAlive = false
 		return client, err
 	}
-	client.session = session
+	client.sshSession = session
+
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}
+	client.sshSession.RequestPty("xterm", 35, 150, modes)
+
+	ok, err := channel.SendRequest("shell", true, nil)
+	fmt.Println(ok, err)
+	if !ok || err != nil {
+		log.Println(client.IpAddress, "远程虚拟窗口打开失败->", err)
+		return client, nil
+	}
 
 	//泡吧
 	go client.runClient()
@@ -74,7 +113,7 @@ func NewSshClient(Username string, Password string, IpAddress string, Port int) 
 
 func (client *Client) sendCmd(cmd string) (string, error) {
 	// 执行远程命令
-	combo, err := client.session.CombinedOutput(cmd)
+	combo, err := client.sshSession.CombinedOutput(cmd)
 	// if err != nil {
 	// 	log.Println("远程执行cmd失败->", err)
 	// }
@@ -108,8 +147,8 @@ func (client *Client) runClient() {
 	for {
 		select {
 		case <-client.KillMe:
-			client.session.Close()
-			client.client.Close()
+			client.sshSession.Close()
+			client.sshClient.Close()
 			client.IsAlive = false
 			log.Println(client.IpAddress, "-[退出]")
 			return
@@ -120,5 +159,8 @@ func (client *Client) runClient() {
 
 		}
 	}
+}
 
+func (client *Client) log(v ...interface{}) {
+	log.Println(v...)
 }
