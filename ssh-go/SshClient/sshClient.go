@@ -1,9 +1,11 @@
 package SshClient
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -11,15 +13,6 @@ import (
 type CmdRes struct {
 	Msg       string
 	ResHandle func(str string)
-}
-
-type ptyRequestMsg struct {
-	Term     string
-	Columns  uint32
-	Rows     uint32
-	Width    uint32
-	Height   uint32
-	Modelist string
 }
 
 type Client struct {
@@ -32,7 +25,7 @@ type Client struct {
 	IsAlive    bool
 	sshSession *ssh.Session
 	sshClient  *ssh.Client
-	sshChannel *ssh.Channel
+	sshChannel ssh.Channel
 	Id         int
 }
 
@@ -73,7 +66,7 @@ func NewSshClient(Username string, Password string, IpAddress string, Port int) 
 		log.Println(client.IpAddress, "创建远程端shell->", err)
 		return client, err
 	}
-	client.sshChannel = &channel
+	client.sshChannel = channel
 	go func() {
 		for req := range inRequests {
 			if req.WantReply {
@@ -85,7 +78,7 @@ func NewSshClient(Username string, Password string, IpAddress string, Port int) 
 	// 创建ssh-session
 	session, err := SshClient.NewSession()
 	if err != nil {
-		client.log(client.IpAddress, "-SshClient 创建ssh session失败", err)
+		client.log("SshClient 创建ssh session失败", err)
 		client.IsAlive = false
 		return client, err
 	}
@@ -99,68 +92,106 @@ func NewSshClient(Username string, Password string, IpAddress string, Port int) 
 	client.sshSession.RequestPty("xterm", 35, 150, modes)
 
 	ok, err := channel.SendRequest("shell", true, nil)
-	fmt.Println(ok, err)
 	if !ok || err != nil {
-		log.Println(client.IpAddress, "远程虚拟窗口打开失败->", err)
+		client.log("远程虚拟窗口打开失败->", err)
 		return client, nil
 	}
-
 	//泡吧
 	go client.runClient()
+
+	time.Sleep(time.Second * 5)
 
 	return client, nil
 }
 
-func (client *Client) sendCmd(cmd string) (string, error) {
-	// 执行远程命令
-	combo, err := client.sshSession.CombinedOutput(cmd)
-	// if err != nil {
-	// 	log.Println("远程执行cmd失败->", err)
-	// }
-	// log.Println("命令输出:", string(combo))
-	return string(combo), err
-}
+// func (client *Client) sendCmd(cmd string) (string, error) {
+// 	// 执行远程命令
+// 	combo, err := client.sshSession.CombinedOutput(cmd)
+// 	// if err != nil {
+// 	// 	log.Println("远程执行cmd失败->", err)
+// 	// }
+// 	// log.Println("命令输出:", string(combo))
+// 	return string(combo), err
+// }
 
 func (client *Client) runClient() {
 
+	//获取输入
 	go func() {
 		for {
 			cmd := <-client.Cmd
-			msg, err := client.sendCmd(cmd.Msg)
+			goCmd := fmt.Sprint(cmd.Msg, "\n")
+			fmt.Println(goCmd)
+			// client.log([]byte(goCmd))
+			// msg, err := client.sendCmd(cmd.Msg)
+			_, err := client.sshChannel.Write([]byte(goCmd))
 			if err != nil {
 				log.Println(client.IpAddress, "-远程执行cmd失败->", err)
 			}
-			cmd.ResHandle(msg)
+			// cmd.ResHandle(msg)
 		}
 	}()
 
+	//第二个协程将远程主机的返回结果返回给用户
 	go func() {
+		br := bufio.NewReader(client.sshChannel)
+		buf := []byte{}
+		t := time.NewTimer(time.Microsecond * 100)
+		defer t.Stop()
+		// 构建一个信道, 一端将数据远程主机的数据写入, 一段读取数据写入ws
+		r := make(chan rune)
+
+		// 另起一个协程, 一个死循环不断的读取ssh channel的数据, 并传给r信道直到连接断开
+		go func() {
+			defer client.sshSession.Close()
+			defer client.sshClient.Close()
+
+			for {
+				x, size, err := br.ReadRune()
+				if err != nil {
+					client.log(err)
+					client.KillMe <- true
+					return
+				}
+				if size > 0 {
+					r <- x
+				}
+			}
+		}()
+
+		// 主循环
 		for {
 			select {
-			case <-time.After(time.Second * 2):
-				log.Println(client.IpAddress, "-[来吧！！！]")
+			// 每隔100微秒, 只要buf的长度不为0就将数据
+			case <-t.C:
+				if len(buf) != 0 {
+					client.log(buf)
+					buf = []byte{}
+				}
+				t.Reset(time.Microsecond * 100)
+			// 前面已经将ssh channel里读取的数据写入创建的通道r, 这里读取数据, 不断增加buf的长度, 在设定的 100 microsecond后由上面判定长度是否返送数据
+			case d := <-r:
+				if d != utf8.RuneError {
+					p := make([]byte, utf8.RuneLen(d))
+					utf8.EncodeRune(p, d)
+					buf = append(buf, p...)
+				} else {
+					buf = append(buf, []byte("@")...)
+				}
 			}
-			fmt.Println("12345531")
 		}
 	}()
 
 	for {
 		select {
 		case <-client.KillMe:
-			client.sshSession.Close()
-			client.sshClient.Close()
 			client.IsAlive = false
-			log.Println(client.IpAddress, "-[退出]")
+			client.log("[退出]")
 			return
-
-		case <-time.After(time.Second * 10):
-			log.Println(client.IpAddress, "-[来吧！！！]")
-			client.KillMe <- true
-
 		}
 	}
 }
 
 func (client *Client) log(v ...interface{}) {
-	log.Println(v...)
+	log.Println("[", client.IpAddress, "]", fmt.Sprint(v...))
 }

@@ -22,15 +22,15 @@ func main() {
 		client, err := SshClient.NewSshClient(v.User, v.Pwd, v.Host, 22)
 		if err == nil {
 			// mapClient[i] = client
-			// go func(x Config.Example) {
-			// 	for _, cv := range x.Cmd {
-			// 		client.Cmd <- &SshClient.CmdRes{
-			// 			Msg:       cv,
-			// 			ResHandle: func(str string) { fmt.Println(client.IpAddress, "[res]->", str) },
-			// 		}
-			// 	}
-			// 	fmt.Println(client.IpAddress, "[end]")
-			// }(v)
+			go func(x Config.Example) {
+				for _, cv := range x.Cmd {
+					client.Cmd <- &SshClient.CmdRes{
+						Msg:       cv,
+						ResHandle: func(str string) { fmt.Println(client.IpAddress, "[res]->", str) },
+					}
+				}
+				fmt.Println(client.IpAddress, "[end]")
+			}(v)
 		} else {
 			fmt.Println(client.IpAddress, err)
 		}
